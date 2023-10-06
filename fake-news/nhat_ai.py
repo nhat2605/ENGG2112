@@ -1,12 +1,12 @@
-import pandas as pd
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.datasets import load_iris
+from keras.models import Model
+from keras.layers import Input, Dense, Concatenate
 from sklearn.model_selection import train_test_split
-from sklearn.naive_bayes import GaussianNB
-from sklearn.metrics import classification_report, accuracy_score
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import classification_report
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.feature_extraction.text import TfidfVectorizer
+from scipy.sparse import hstack
+import numpy as np
+import pandas as pd
 
 df = pd.read_csv("train.csv")
 df['author'].fillna('Unknown', inplace=True)
@@ -14,37 +14,59 @@ df['title'].fillna('Ambiguous', inplace=True)
 df['text'].fillna('Ambiguous', inplace=True)
 df.drop_duplicates(inplace=True)
 
-vectorizer = TfidfVectorizer(max_features=5000, stop_words='english')
-test = df['text']
-X_text = vectorizer.fit_transform(test)
+# TF-IDF Vectorization for text and title
+vectorizer_text = TfidfVectorizer(max_features=5000)
+X_text = vectorizer_text.fit_transform(df['text']).toarray()
+
+vectorizer_title = TfidfVectorizer(max_features=1000)
+X_title = vectorizer_title.fit_transform(df['title']).toarray()
+
+# One-hot encoding for authors
+encoder = OneHotEncoder()
+X_author = encoder.fit_transform(df[['author']]).toarray()
 
 # Train-test split
-X_train, X_test, y_train, y_test = train_test_split(df['text'], df['label'], test_size=0.2, random_state=42)
+y = df['label'].values
+X_train_text, X_test_text, X_train_title, X_test_title, X_train_author, X_test_author, y_train, y_test = train_test_split(
+    X_text, X_title, X_author, y, test_size=0.2, random_state=42)
 
-# Create a pipeline
-pipeline = Pipeline([
-    ('tfidf', TfidfVectorizer(stop_words='english')),
-    ('clf', RandomForestClassifier())
-])
+# Neural Network Architecture
+input_text = Input(shape=(X_train_text.shape[1],))
+input_title = Input(shape=(X_train_title.shape[1],))
+input_author = Input(shape=(X_train_author.shape[1],))
 
-# Hyperparameter grid
-param_grid = {
-    'tfidf__max_features': [2000, 5000, None],
-    'tfidf__ngram_range': [(1, 1), (1, 2)],
-    'clf__n_estimators': [50, 100, 200],
-    'clf__max_depth': [None, 10, 20, 30],
-}
+# Layers for text
+x1 = Dense(128, activation='relu')(input_text)
+x1 = Dense(64, activation='relu')(x1)
 
-# Grid search
-grid_search = GridSearchCV(pipeline, param_grid, cv=5, verbose=1, n_jobs=-1)
-grid_search.fit(X_train, y_train)
+# Layers for title
+x2 = Dense(128, activation='relu')(input_title)
+x2 = Dense(64, activation='relu')(x2)
 
-# Best model
-best_model = grid_search.best_estimator_
+# Layers for author
+x3 = Dense(128, activation='relu')(input_author)
+x3 = Dense(64, activation='relu')(x3)
 
-# Predictions
-y_pred = best_model.predict(X_test)
+# Concatenate
+concat = Concatenate()([x1, x2, x3])
 
-# Evaluation
-print("Model Accuracy:", accuracy_score(y_test, y_pred))
+# Final layers
+out = Dense(64, activation='relu')(concat)
+out = Dense(1, activation='sigmoid')(out)
+
+# Compile model
+model = Model(inputs=[input_text, input_title, input_author], outputs=out)
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+# Train model
+model.fit([X_train_text, X_train_title, X_train_author], y_train, epochs=10, batch_size=32)
+
+# Evaluate model
+score = model.evaluate([X_test_text, X_test_title, X_test_author], y_test)
+print(f"Test Accuracy: {score[1]}")
+
+y_pred = model.predict([X_test_text, X_test_title, X_test_author])
+y_pred = np.round(y_pred).flatten()  # Round the probabilities to get binary class labels
+
+# Print classification report
 print(classification_report(y_test, y_pred))
